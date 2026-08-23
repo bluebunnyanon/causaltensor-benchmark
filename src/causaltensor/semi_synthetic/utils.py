@@ -1,0 +1,168 @@
+import numpy as np
+import pandas as pd
+
+
+def sample_treatment_parameters(n, T, rng):
+    """
+    Sample treatment pattern parameters with safe integer bounds.
+    
+    Args:
+        n: Number of entities
+        T: Number of time periods
+        rng: Random number generator
+    
+    Returns:
+        Tuple of (m1, m2, lookback_a, duration_b)
+    """
+    # m1 in [ceil(0.05*n), floor(0.2*n)], ensure >=1
+    m1_low = max(1, int(np.ceil(0.05 * n)))
+    m1_high = max(m1_low, int(np.floor(0.2 * n)))
+    m1 = int(rng.integers(m1_low, m1_high + 1))
+    
+    # m2 in [ceil(0.6*T), floor(0.8*T)] capped to [0, T-1]
+    m2_low = min(int(np.ceil(0.6 * T)), T - 1)
+    m2_high = min(max(m2_low, int(np.floor(0.8 * T))), T - 1)
+    m2 = int(rng.integers(m2_low, m2_high + 1))
+    
+    # lookback_a in [ceil(0.05*T), floor(0.1*T)], clamp to [1, T-1]
+    lb_low = max(1, int(np.ceil(0.05 * T)))
+    lb_high = max(lb_low, int(np.floor(0.1 * T)))
+    lookback_a = int(rng.integers(lb_low, lb_high + 1))
+    lookback_a = min(lookback_a, max(1, T - 1))
+    
+    # duration_b in [ceil(0.1*T), floor(0.2*T)], clamp to [1, T-1]
+    dur_low = max(1, int(np.ceil(0.1 * T)))
+    dur_high = max(dur_low, int(np.floor(0.2 * T)))
+    duration_b = int(rng.integers(dur_low, dur_high + 1))
+    duration_b = min(duration_b, max(1, T - 1))
+    
+    return m1, m2, lookback_a, duration_b
+
+def build_baseline_M(O, treated_states, treat_start_years, baseline_type='control'):
+    if baseline_type == 'control':
+        # Create boolean mask from list of treated state indices.
+        # If treated_states is empty (no observed treatment), M = all of O.
+        treated_mask = np.zeros(O.shape[0], dtype=bool)
+        treated_mask[treated_states] = True
+        M = O[~treated_mask, :]
+    elif baseline_type == 'pre-treatment':
+        if not treat_start_years:
+            raise ValueError(
+                "Cannot build a pre-treatment baseline when treat_start_years "
+                "is empty (dataset has no observed treatment). Use "
+                "baseline_type='control' instead."
+            )
+        M = O[:, :min(treat_start_years)]
+    else:
+        raise ValueError(
+            f"baseline_type must be 'control' or 'pre-treatment', got {baseline_type!r}"
+        )
+
+    return M, M.shape[0], M.shape[1]
+
+
+
+def inject_treatment_centered(M, Z, *,
+                              treatment_level=0.2,
+                              sigma_unit_scale=0.8,
+                              sigma_time_scale=0.2,
+                              rng=None):
+    """
+    Inject treatment with unit- and time-heterogeneity, centered over treated cells:
+        O = M + (tau* + delta_i + eta_t) ∘ Z
+
+    - tau* = mean(|M|) * treatment_level
+    - delta_i ~ N(0, sigma_unit_scale * |tau*|)
+    - eta_t   ~ N(0, sigma_time_scale * |tau*|)
+    - Both delta_i and eta_t are re-centered (weighted by treated counts) so that
+      the ATT over treated cells equals tau*
+
+    Returns:
+        O        : observed panel
+        tau_star : intended average effect (ground truth)
+    """
+    rng = np.random.default_rng(rng)
+    n, T = M.shape
+
+    # Base effect and heterogeneity scales
+    tau_star = np.mean(np.abs(M)) * treatment_level
+    sigma_delta = sigma_unit_scale * abs(tau_star)
+    sigma_eta   = sigma_time_scale * abs(tau_star)
+
+    # Draw heterogeneity
+    delta_i = rng.normal(0.0, sigma_delta, size=n)   # unit-fixed shock
+    eta_t   = rng.normal(0.0, sigma_eta,   size=T)   # time-fixed shock
+
+    # Treated counts
+    treated_per_i = Z.sum(axis=1)        # times each unit is treated
+    treated_per_t = Z.sum(axis=0)        # units treated at each time
+    treated_total = Z.sum()
+
+    # Center over treated cells (if any treated)
+    delta_i_ctr = delta_i.copy()
+    eta_t_ctr   = eta_t.copy()
+    if treated_total > 0:
+        # unit-centering: weighted by #treated times per unit
+        if treated_per_i.sum() > 0:
+            delta_mean_treated = (delta_i * treated_per_i).sum() / treated_per_i.sum()
+            delta_i_ctr -= delta_mean_treated
+        # time-centering: weighted by #treated units per time
+        if treated_per_t.sum() > 0:
+            eta_mean_treated = (eta_t * treated_per_t).sum() / treated_per_t.sum()
+            eta_t_ctr -= eta_mean_treated
+
+    # Build treatment matrix and observed panel
+    Tmat = tau_star + delta_i_ctr[:, None] + eta_t_ctr[None, :]
+    O = M + Tmat * Z
+
+    # Ground-truth ATT - will be same as tau_star after unit and time centering
+    att_true = (Tmat * Z).sum() / treated_total if treated_total > 0 else 0.0
+    assert np.isclose(att_true, tau_star)
+
+    return O, tau_star
+
+
+def print_summary_table(df: pd.DataFrame) -> None:
+    """Print mean +/- std of relative error grouped by treatment_level / method / pattern."""
+    summary = (
+        df.groupby(["treatment_level", "method", "pattern"])["error"]
+        .agg(mean="mean", std="std")
+        .reset_index()
+    )
+    summary["std"] = summary["std"].fillna(0.0)
+
+    col_widths = {
+        "treatment_level": max(len("treatment_level"), summary["treatment_level"].apply(lambda x: f"{x}").str.len().max()),
+        "method":          max(len("method"),          summary["method"].str.len().max()),
+        "pattern":         max(len("pattern"),         summary["pattern"].str.len().max()),
+        "error":           len("mean_error +/- std"),
+    }
+
+    header = (
+        f"{'treatment_level':<{col_widths['treatment_level']}}  "
+        f"{'method':<{col_widths['method']}}  "
+        f"{'pattern':<{col_widths['pattern']}}  "
+        f"{'mean_error +/- std':>{col_widths['error']}}"
+    )
+    sep = "-" * len(header)
+
+    print("\n=== Summary: mean relative error +/- std across trials ===")
+    print(sep)
+    print(header)
+    print(sep)
+
+    prev_level = None
+    for _, row in summary.iterrows():
+        if row["treatment_level"] != prev_level:
+            if prev_level is not None:
+                print(sep)
+            prev_level = row["treatment_level"]
+        cell = f"{row['mean']:.4f} +/- {row['std']:.4f}"
+        print(
+            f"{str(row['treatment_level']):<{col_widths['treatment_level']}}  "
+            f"{row['method']:<{col_widths['method']}}  "
+            f"{row['pattern']:<{col_widths['pattern']}}  "
+            f"{cell:>{col_widths['error']}}"
+        )
+
+    print(sep)
