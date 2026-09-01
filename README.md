@@ -8,8 +8,11 @@ CausalTensor is a Python package for causal inference and policy evaluation on p
 
 ## Installation
 
+Clone this repository and install it locally:
+
+
 ```bash
-pip install causaltensor
+pip install -e
 ```
 
 Optional dependencies: `cvxpy` (required for SDID), `pyreadr` (required for some built-in datasets)
