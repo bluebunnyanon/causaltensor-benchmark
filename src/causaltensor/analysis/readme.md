@@ -13,7 +13,7 @@ Clone the repository, then install in editable mode with analysis dependencies. 
 
 ```bash
 git clone https://github.com/bluebunnyanon/causaltensor-benchmark
-cd causaltensor
+cd causaltensor-benchmark
 poetry install -E static-plots
 poetry shell
 ```

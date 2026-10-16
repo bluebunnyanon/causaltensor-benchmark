@@ -12,7 +12,7 @@ Clone this repository and install it locally:
 
 
 ```bash
-pip install -e
+pip install -e .
 ```
 
 Optional dependencies: `cvxpy` (required for SDID), `pyreadr` (required for some built-in datasets)
