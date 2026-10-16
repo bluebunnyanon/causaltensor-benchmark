@@ -1,0 +1,4 @@
+method,pattern,critical_abs_tau,n_null
+CovPCA,Adaptive,0.11737996134251304,500
+DCPR,Adaptive,0.0356434087457303,500
+MC_NNM_CV,Adaptive,0.04627425522779532,500

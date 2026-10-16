@@ -19,6 +19,7 @@ from causaltensor.cauest.MCNNM import MCNNMPanelSolver, MC_NNM_with_cross_valida
 from causaltensor.cauest.OLSSyntheticControl import OLSSCPanelSolver, ols_synthetic_control
 from causaltensor.cauest.RobustSyntheticControl import robust_synthetic_control
 from causaltensor.cauest.SDID import SDID, SDIDPanelSolver
+from causaltensor.cauest.TCBaseline import TCBaselinePanelSolver, tc_baseline
 from causaltensor.cauest.result import Result
 
 # Estimator string keys for CSVs, plots, CLI, and :func:`~causaltensor.real.estimate.estimate`.
@@ -30,6 +31,7 @@ CANONICAL_ESTIMATOR_METHODS: tuple[str, ...] = (
     "SDID",
     "SC",
     "RSC",
+    "TC_BASELINE",
 )
 
 
@@ -89,7 +91,8 @@ def get_tau_from_method_with_error(method_name: str, O_syn: np.ndarray, Z: np.nd
     Parameters
     ----------
     method_name : str
-        One of: ``DCPR``, ``MC_NNM_CV``, ``CovPCA``, ``OLS_DID``, ``SDID``, ``SC``, ``RSC``.
+        One of: ``DCPR``, ``MC_NNM_CV``, ``CovPCA``, ``OLS_DID``, ``SDID``,
+        ``SC``, ``RSC``, ``TC_BASELINE``.
     O_syn : np.ndarray
         Observed panel (n × T).
     Z : np.ndarray
@@ -119,6 +122,8 @@ def get_tau_from_method_with_error(method_name: str, O_syn: np.ndarray, Z: np.nd
         elif method_name == "CovPCA":
             res = CovariancePCAPanelSolver(O_syn, Z).fit()
             tau_hat = res.tau
+        elif method_name == "TC_BASELINE":
+            _, tau_hat = tc_baseline(O_syn, Z)
         else:
             raise ValueError(f"Unknown method: {method_name}")
         return tau_hat, None
@@ -154,6 +159,7 @@ def get_fit_result_from_method(
     method_name: str,
     O: np.ndarray,
     Z: np.ndarray,
+    suggest_r: Optional[int] = None,
 ) -> Tuple[Optional[Result], Optional[str]]:
     """
     Fit one estimator and return the :class:`~causaltensor.cauest.result.Result`
@@ -169,7 +175,10 @@ def get_fit_result_from_method(
     try:
         if method_name == "DCPR":
             res = DCPanelSolver(O, Z).fit(
-                spectrum_cut=0.002, method="convex", method_non_neg=None
+                suggest_r=suggest_r,
+                spectrum_cut=0.002,
+                method="convex",
+                method_non_neg=None,
             )
         elif method_name == "MC_NNM_CV":
             Omega = 1.0 - Z
@@ -186,10 +195,14 @@ def get_fit_result_from_method(
         elif method_name == "SC":
             res = OLSSCPanelSolver(O, Z).fit()
         elif method_name == "RSC":
-            Mhat, tau = robust_synthetic_control(O, Z)
+            Mhat, tau = robust_synthetic_control(
+                O, Z, suggest_r=-1 if suggest_r is None else suggest_r
+            )
             res = Result(baseline=Mhat, tau=tau, return_tau_scalar=True)
             res.O = O
             res.Z = Z
+        elif method_name == "TC_BASELINE":
+            res = TCBaselinePanelSolver(O, Z).fit()
         else:
             return None, f"Unknown method: {method_name}"
         return res, None

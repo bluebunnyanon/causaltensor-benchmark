@@ -6,27 +6,13 @@ Scripts in this folder reproduce the empirical results for the causaltensor pape
 
 ## Install causaltensor
 
-**Python 3.10+** is required.
-
-### From PyPI
-
-For the released package only (no local analysis scripts):
-
-```bash
-pip install causaltensor
-```
-
-Add Kaleido for PNG export when using Plotly elsewhere:
-
-```bash
-pip install "causaltensor[static-plots]"
-```
 
 ### From this repo (paper reproduction)
 
 Clone the repository, then install in editable mode with analysis dependencies. **Poetry** (recommended):
 
 ```bash
+git clone https://github.com/bluebunnyanon/causaltensor-benchmark
 cd causaltensor
 poetry install -E static-plots
 poetry shell
@@ -38,11 +24,11 @@ poetry shell
 pip install -e ".[static-plots]"
 ```
 
-The `static-plots` extra pulls in Kaleido. Real-data and semi-synthetic `--plots` need it.
+The `static-plots` extra pulls in Kaleido, for saving Plotly figures from the notebooks. `plot.py` writes the paper PNGs with Matplotlib and does not need it.
 
 ### Data
 
-Raw panels live under `datasets/raw/` at the repo root (or pass `--raw-path` on dataset scripts). Built-in names include `smoking`, `basque`, `pwt`, `dunnhumby`, `movielens`, and others—see `causaltensor.datasets.available_datasets()`.
+Raw panels live under `datasets/raw/` at the repo root (or pass `--raw-path` on dataset scripts). Built-in names include `smoking`, `basque`, `pwt`, `jsa_dc`, `dunnhumby`, `movielens`, and others—see `causaltensor.datasets.available_datasets()`.
 
 ## Run the scripts
 
@@ -64,11 +50,11 @@ python -m causaltensor.analysis.<script_name> ...
 
 ### 1. Real data
 
-Point estimates and (optionally) counterfactual plots on datasets with an observed treatment matrix `Z`.
+Point estimates on datasets with an observed treatment matrix `Z`. Counterfactual figures are drawn by `plot.py` from the series CSV.
 
 ```bash
-python real_dataset_report.py smoking --plots
-python real_dataset_report.py dunnhumby --plots
+python real_dataset_report.py smoking
+python real_dataset_report.py dunnhumby
 ```
 
 **Outputs** (`results/real_data/<dataset>/`):
@@ -76,10 +62,22 @@ python real_dataset_report.py dunnhumby --plots
 | File | Contents |
 |------|----------|
 | `real_data_report_<dataset>.csv` | `tau_hat` (and related fields) per method |
-| `counterfactual_<method>.png` | Per-method counterfactual (with `--plots`) |
-| `counterfactual_all_methods.png` | Overlay of all methods |
+| `counterfactual_series_<dataset>.csv` | Actual path and each method's counterfactual for the plotted unit |
+| `counterfactual_all_methods.png` | Overlay of all methods (`python -m causaltensor.analysis.plot`) |
 
 `movielens` and `retailrocket` are registered loaders but omitted from the default real-data workflow when no `Z` is shipped.
+
+**D.C. Job Search Assistance RCT** (`jsa_dc`). 1996Q1 `CONTROL` versus `SJSA` (486 each). Outcomes are quarterly earnings from 1994Q4 through 1995Q4 and 1996Q2 through 1998Q3; the entry quarter is dropped. Treatment is a Block onset in 1996Q2. `RCT` is the difference in mean post-period earnings, with a 95% interval. `ANCOVA_HC3` is the same post-period mean, adjusted for the five pre-period quarters, with HC3 standard errors.
+
+```bash
+python -m causaltensor.analysis.rct
+```
+
+**Outputs** (`results/rct/`):
+
+| File | Contents |
+|------|----------|
+| `jsa_dc.csv` | `RCT` and `ANCOVA_HC3` with standard errors and 95% intervals, then one estimate per panel method |
 
 ---
 
@@ -88,10 +86,10 @@ python real_dataset_report.py dunnhumby --plots
 Inject synthetic treatment into a real panel, sweep treatment levels and assignment patterns, compare relative error `|τ̂ − τ*| / |τ*|`.
 
 ```bash
-python semi_synthetic.py smoking --plots
-python semi_synthetic.py pwt --plots
-python semi_synthetic.py movielens --plots --treatment-patterns "Adaptive,IID"
-python semi_synthetic.py dunnhumby --plots --treatment-patterns "Adaptive,IID"
+python semi_synthetic.py smoking
+python semi_synthetic.py pwt
+python semi_synthetic.py movielens --treatment-patterns "Adaptive,IID"
+python semi_synthetic.py dunnhumby --treatment-patterns "Adaptive,IID"
 ```
 
 | Setting | Value |
@@ -106,18 +104,36 @@ python semi_synthetic.py dunnhumby --plots --treatment-patterns "Adaptive,IID"
 | File | Contents |
 |------|----------|
 | `semi_synthetic_control_results_detailed.csv` | All Monte Carlo trials |
-| `semi_synthetic_control_results_aggregated.csv` | Mean ± std per `(method, pattern, level)` |
-| `semi_synthetic_control_error_boxplot.png` | Box plots by treatment level (with `--plots`) |
+| `semi_synthetic_control_results_aggregated.csv` | Per `(method, pattern, level)`: mean relative error, signed bias, RMSE, error quantiles, successful runs |
 
-Rebuild a box plot from an existing detailed CSV:
+### 3. Heterogeneous effects (CATE)
+
+PWT only, Block assignment, one treatment level. The baseline is the same control-panel `M` as the ATT benchmark. Unit effects are a fixed linear function of standardized `hc`, `csh_i`, and `openness`, centered on the full sample so their population average is `tau*`. A trial's ATT is the average of those fixed effects over the units treated in that trial. Group cuts are the full-sample medians. Each estimator is scored from the unit effects implied by its fitted untreated surface.
 
 ```bash
-python semi_synthetic.py --plot-from-csv results/semi_synthetic_data/smoking/semi_synthetic_control_results_detailed.csv
+python -m causaltensor.analysis.cate
 ```
+
+| Setting | Value |
+|---------|-------|
+| Dataset | `pwt` |
+| Pattern | `Block` |
+| Treatment level | `0.1` |
+| Trials | `100` |
+| Covariates | `hc`, `csh_i`, `openness` |
+| Coefficients | `1, 0.5, -0.5` on `hc`, `csh_i`, `openness`; heterogeneity scale `gamma = 0.5` |
+
+**Outputs** (`results/cate/`):
+
+| File | Contents |
+|------|----------|
+| `cate_pwt_block_delta0.1_trials100_metrics.csv` | Per trial and method: root PEHE, correlation, and the trial ATT |
+| `cate_pwt_block_delta0.1_trials100_gates.csv` | Per trial, method, and covariate group: true and estimated GATE |
+| `cate_pwt_block_delta0.1_trials100.png` | PEHE–correlation scatter and group-effect panel (`python -m causaltensor.analysis.plot`) |
 
 ---
 
-### 3. Power analysis
+### 4. Power analysis
 
 A/A null simulations, empirical `|τ|` thresholds, and Monte Carlo power over a grid of relative effects δ.
 
@@ -142,14 +158,22 @@ python power_analysis.py movielens --pattern IID --baseline control
 | `<pattern>_null_trials.csv` | A/A null draws |
 | `<pattern>_empirical_thresholds.csv` | Critical `|τ|` at α = 0.05 |
 | `<pattern>_empirical_power.csv` | Power vs δ |
-| `<pattern>_null_tau_distribution.png` | Null τ distribution |
-| `<pattern>_empirical_power.png` | Power curves |
+
+`python -m causaltensor.analysis.plot` writes `results/power_analysis/composite_power_1x4.png` and `composite_null_tau_1x4.png` when the four paper CSVs are present (PWT Block, PWT Staggered, MovieLens IID, MovieLens Adaptive).
+
+Standardized effect magnitudes for the four paper baselines:
+
+```bash
+python -m causaltensor.analysis.standardized_effects
+```
+
+**Output:** `results/datasets.csv` — `mean(|M|)`, `SD(M)`, residual `SD(R)`, and `τ*/SD(M)` at Δ = 0.05, 0.10, 0.20.
 
 With `--baseline control`, filenames use the `control_` prefix when multiple baselines share a folder (e.g. `control_Block_null_trials.csv`).
 
 ---
 
-### 4. Synthetic DGP ablation
+### 5. Synthetic DGP ablation
 
 Sweep rank, unit heterogeneity δ, time heterogeneity η, and noise σ on a fully synthetic panel (`N=200`, `T=50`, `30` MC trials per grid point, `Block` assignment).
 
@@ -169,13 +193,31 @@ python -m causaltensor.analysis.synthetic_ablation
 |------|----------|
 | `ablation_N200_T50_Block_trials30_trials.csv` | Per-trial relative errors |
 | `ablation_N200_T50_Block_trials30_summary.csv` | Mean ± std per `(axis, value, method)` |
-| `ablation_N200_T50_Block_trials30.png` | 1×4 line plot (one subplot per ablated axis) |
+| `ablation_N200_T50_Block_trials30.png` | 1×4 line plot (`python -m causaltensor.analysis.plot`) |
 
 Useful overrides: `--pattern Staggered`, `--trials 50`, `--methods OLS_DID SDID`, `--out-dir <path>`.
 
 ---
 
-### 5. Synthetic — load tests
+### 6. Synthetic DGP robustness
+
+One treatment level (`Δ = 0.1`) on the same `N=200`, `T=50` panel. The reference DGP is the usual Gaussian low-rank baseline, iid Gaussian noise, and additive heterogeneous effect. The other settings are AR(1) noise (`ρ = 0.5`), Student-t noise (3 degrees of freedom), a nonnegative low-rank baseline with Gamma-distributed factors and Poisson noise (`mean(M) = 1`), and a cell effect proportional to `|M|`. AR(1) and Student-t noise are scaled to the same variance as the reference, and the baseline-dependent effect is scaled so the treated-cell average still equals the reference ATT. Estimators run on IID, Block, Staggered, and Adaptive only where they are valid.
+
+```bash
+python -m causaltensor.analysis.synthetic_robustness
+```
+
+**Outputs** (`results/synthetic_robustness/`):
+
+| File | Contents |
+|------|----------|
+| `robustness_N200_T50_delta0.1_trials30_trials.csv` | Per-trial relative errors |
+| `robustness_N200_T50_delta0.1_trials30_summary.csv` | Mean ± std per `(dgp, pattern, method)` |
+| `robustness_N200_T50_delta0.1_trials30.png` | Mean relative ATT error with 95% bootstrap CIs (`python -m causaltensor.analysis.plot`); panels are Block, Staggered, IID, Adaptive |
+
+---
+
+### 7. Synthetic — load tests
 
 Wall time, peak RSS during fitting (`rss_fit_peak_mb`), and ATT relative error on an `N × T` grid. Tight caps below are useful for a quick smoke run; drop them for the full grid.
 
@@ -196,7 +238,7 @@ python load_tests.py --timeout 20 --memory-mb 100 --n-reps 3
 | `load_test_trials.csv` | One row per `(N, T, method, rep)` |
 | `load_test_cells.csv` | Aggregated per cell |
 | `load_test_summary.csv` | Per-estimator rollup |
-| `load_test_heatmaps.png` | Time / memory / error heatmaps |
+| `load_test_heatmaps.png` | Wide heatmaps (`python -m causaltensor.analysis.plot`): mean wall time, peak RSS, and relative ATT error across successful repetitions; 3 metric rows × one column per estimator |
 
 ---
 
@@ -204,10 +246,14 @@ python load_tests.py --timeout 20 --memory-mb 100 --n-reps 3
 
 ```
 results/
+├── datasets.csv
 ├── real_data/<dataset>/
+├── rct/
 ├── semi_synthetic_data/<dataset>/
 ├── power_analysis/<dataset>/
 ├── synthetic_ablation/
+├── synthetic_robustness/
+├── cate/
 └── load_tests/
 ```
 
@@ -215,10 +261,16 @@ results/
 
 | Script | Role |
 |--------|------|
-| `real_dataset_report.py` | Real `Z`: tabular estimates + counterfactuals |
+| `real_dataset_report.py` | Real `Z`: tabular estimates and counterfactual series |
+| `rct.py` | D.C. JSA RCT: randomized estimate, ANCOVA-HC3, and panel fits |
 | `semi_synthetic.py` | Real panel + injected τ: error distributions |
 | `power_analysis.py` | Null calibration + empirical power |
 | `synthetic_ablation.py` | Synthetic DGP sensitivity (rank, heterogeneity, noise) |
+| `synthetic_robustness.py` | One-level check: AR(1), heavy tails, baseline-dependent effect |
+| `cate.py` | PWT Block CATE runner; the experiment is `semi_synthetic.cate.run_cate` |
 | `load_tests.py` | Synthetic scalability: time, memory, ATT error |
+| `standardized_effects.py` | Control-baseline `mean(|M|)`, `SD(M)`, and `τ*/SD(M)` at Δ = 5/10/20% |
+| `validate_prop99.py` | Prop99 vs `synthdid`, `MCPanel`, and pysyncon RSC |
+| `plot.py` | Figures from the CSVs in `results/` |
 
-Each script supports `--help` for the full CLI.
+Analysis scripts write CSVs. `python -m causaltensor.analysis.plot` reads `results/` and writes the PNGs. Each script supports `--help` for the full CLI.

@@ -32,7 +32,9 @@ from causaltensor.semi_synthetic.utils import (
 )
 from causaltensor.synthetic.utils import (
     add_noise,
+    add_noise_ar1,
     add_noise_poisson,
+    add_noise_student_t,
     generate_low_rank_M,
     generate_low_rank_M_nonneg,
 )
@@ -46,7 +48,7 @@ def generate(
     T: int,
     rank: int = 3,
     noise_scale: float = 1.0,
-    noise_type: Literal["normal", "poisson"] = "normal",
+    noise_type: Literal["normal", "poisson", "ar1", "student_t"] = "normal",
     M_type: Literal["normal", "nonneg"] = "normal",
     mean_M: float = 0.0,
     scale_M: float = 1.0,
@@ -55,6 +57,10 @@ def generate(
     sigma_unit_scale: float = 0.8,
     sigma_time_scale: float = 0.2,
     seed: Optional[int] = None,
+    normalize_M: bool = False,
+    baseline_dependent: bool = False,
+    rho: float = 0.5,
+    df: int = 3,
 ) -> Tuple[np.ndarray, np.ndarray, float]:
     """
     Generate a synthetic panel from a low-rank factor model.
@@ -69,9 +75,11 @@ def generate(
         Rank of the latent baseline matrix M.
     noise_scale : float, default 1.0
         Standard deviation of additive Gaussian noise (ignored for Poisson).
-    noise_type : {'normal', 'poisson'}, default 'normal'
-        Noise distribution. Use ``'poisson'`` with ``M_type='nonneg'`` for
-        count data.
+    noise_type : {'normal', 'poisson', 'ar1', 'student_t'}, default 'normal'
+        Noise distribution. ``'ar1'`` is Gaussian AR(1) with correlation ``rho``.
+        ``'student_t'`` is a t distribution with ``df`` degrees of freedom.
+        Both are scaled to variance ``noise_scale**2``. Use ``'poisson'`` with
+        ``M_type='nonneg'`` for count data.
     M_type : {'normal', 'nonneg'}, default 'normal'
         Factor distribution for M.
 
@@ -87,8 +95,8 @@ def generate(
         Synthetic treatment pattern. ``None`` returns Z = all zeros.
     treatment_level : float or None, optional
         When provided, a treatment effect of size ``treatment_level * mean(|M|)``
-        is injected into ``O`` using :func:`inject_treatment_centered` and
-        ``tau_true`` is the known ATT.
+        is injected into ``O`` and ``tau_true`` is the known ATT. The shape of
+        that effect is set by ``baseline_dependent``.
         When ``None`` (default), no effect is injected and ``tau_true`` is
         ``0.0``; ``O`` is baseline + noise only. The return type is always
         ``(O, Z, tau_true)``.
@@ -101,7 +109,8 @@ def generate(
         ``sigma_time_scale * |tau*|``). Ignored when ``treatment_level`` is ``None``.
     seed : int or None, optional
         Random seed for full reproducibility.
-
+    normalize_M : bool, default False
+        If True, rescale M so ``std(M)`` equals 1 before treatment and noise. M is rescaled but not centered.
     Returns
     -------
     O : np.ndarray, shape (N, T)
@@ -149,6 +158,8 @@ def generate(
         M = generate_low_rank_M_nonneg(N, T, rank=rank, mean_M=max(mean_M, 1.0), rng=rng)
     else:
         M = generate_low_rank_M(N, T, rank=rank, mean=mean_M, scale=scale_M, rng=rng)
+    if normalize_M:
+        M = M / np.std(M)
 
     # --- Generate treatment mask ---
     if treatment_pattern is None:
@@ -183,11 +194,16 @@ def generate(
             sigma_unit_scale=sigma_unit_scale,
             sigma_time_scale=sigma_time_scale,
             rng=rng,
+            baseline_dependent=baseline_dependent,
         )
 
     # --- Add noise (always after treatment injection so rng state is consistent) ---
     if noise_type == "poisson":
         O = add_noise_poisson(M, rng=rng)
+    elif noise_type == "ar1":
+        O = add_noise_ar1(M, noise_scale=noise_scale, rho=rho, rng=rng)
+    elif noise_type == "student_t":
+        O = add_noise_student_t(M, noise_scale=noise_scale, df=df, rng=rng)
     else:
         O = add_noise(M, noise_scale=noise_scale, rng=rng)
 

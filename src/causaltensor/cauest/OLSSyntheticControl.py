@@ -13,6 +13,28 @@ from causaltensor.cauest.panel_solver import PanelSolver
 from causaltensor.cauest.result import Result
 
 
+def _project_simplex(w: np.ndarray) -> np.ndarray:
+    """Euclidean projection onto ``w >= 0``, ``sum(w) = 1``."""
+    u = np.sort(w)[::-1]
+    cssv = np.cumsum(u)
+    rho = np.nonzero(u * np.arange(1, len(u) + 1) > (cssv - 1))[0][-1]
+    theta = (cssv[rho] - 1) / (rho + 1.0)
+    return np.maximum(w - theta, 0.0)
+
+
+def _solve(prob: cp.Problem, W_var: cp.Variable) -> np.ndarray:
+    """CLARABEL, then OSQP, then SCS. Later solvers are projected onto the simplex."""
+    for solver, project in ((cp.CLARABEL, False), (cp.OSQP, True), (cp.SCS, True)):
+        try:
+            prob.solve(solver=solver)
+        except cp.SolverError:
+            continue
+        if prob.status in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE) and W_var.value is not None:
+            weights = np.asarray(W_var.value, dtype=float)
+            return _project_simplex(weights) if project else np.clip(weights, 0.0, None)
+    raise cp.SolverError("CLARABEL, OSQP, and SCS failed to solve the synthetic-control weights.")
+
+
 def _solve_simplex_qp(y_c: np.ndarray, y_t: np.ndarray) -> np.ndarray:
     """Solve ``min ||y_t - y_c @ W||²  s.t. W >= 0, sum(W) = 1``."""
     W_var = cp.Variable(y_c.shape[1])
@@ -20,8 +42,7 @@ def _solve_simplex_qp(y_c: np.ndarray, y_t: np.ndarray) -> np.ndarray:
         cp.Minimize(cp.sum_squares(y_t - y_c @ W_var)),
         [W_var >= 0, cp.sum(W_var) == 1],
     )
-    prob.solve(solver=cp.CLARABEL)
-    return np.clip(np.asarray(W_var.value, dtype=float), 0.0, None)
+    return _solve(prob, W_var)
 
 
 def _solve_simplex_qp_weighted(X0: np.ndarray, X1: np.ndarray,
@@ -36,8 +57,7 @@ def _solve_simplex_qp_weighted(X0: np.ndarray, X1: np.ndarray,
         cp.Minimize(cp.sum_squares(cp.multiply(sqrtV, X1 - X0 @ W_var))),
         [W_var >= 0, cp.sum(W_var) == 1],
     )
-    prob.solve(solver=cp.CLARABEL)
-    return np.clip(np.asarray(W_var.value, dtype=float), 0.0, None)
+    return _solve(prob, W_var)
 
 
 def _slsqp_minimizer(out):
@@ -271,8 +291,12 @@ class OLSSCPanelSolver(PanelSolver):
         tau = 0.0
         M = np.copy(self.Y)
         self.individual_te = []
+        weighted_tau_sum = 0.0
+        total_treated_cells = 0
+
         for i, (s, T0_i) in enumerate(zip(self.treatment_units, self.T0_units)):
             Y1_s = self.Y1[:, i].reshape((T,))
+
             if self.X is not None:
                 K = len(self.X1)
                 X1_s = self.X1[:, i].reshape((K,))
@@ -284,12 +308,18 @@ class OLSSCPanelSolver(PanelSolver):
                 counterfactual_s, tau_s, W_s, V_s = self.ols_inference(
                     Y1_s, self.Y0, T0_i
                 )
-            tau += tau_s
+
             M[:, s] = counterfactual_s
             weights.append(W_s)
             self.individual_te.append([s, tau_s])
 
-        tau /= len(self.treatment_units)
+            # number of treated cells for this unit
+            n_treated_cells_i = int(np.sum(self._Z_raw[s]))
+
+            weighted_tau_sum += tau_s * n_treated_cells_i
+            total_treated_cells += n_treated_cells_i
+
+        tau = weighted_tau_sum / total_treated_cells
 
         if self.pval:
             self.individual_te = self.permutation_test()

@@ -183,7 +183,7 @@ def load_dataset(
         Tuple of (Y_df, Z_df, X_df) where Z_df and X_df may be None
     
     Available datasets:
-        - smoking: California smoking ban (1988)
+        - smoking: California Proposition 99 tobacco-control program (1989)
         - basque: Basque Country GDP (1975)
         - german_reunification: West Germany reunification (1990)
         - texas: Texas prison reform (1993)
@@ -196,6 +196,7 @@ def load_dataset(
         - dunnhumby: Dunnhumby retail dataset
         - truus: Truus retail dataset
         - movielens: MovieLens recommendation dataset
+        - jsa_dc: D.C. Job Search Assistance RCT, 1996Q1 CONTROL vs SJSA
     """
     try:
         loader = DATASET_BUILDERS[dataset_name]
@@ -206,7 +207,7 @@ def load_dataset(
 
 
 def _load_smoking_dataset(datasets_path: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Load smoking dataset - California smoking ban (1988)"""
+    """Load smoking dataset - California Proposition 99 (effective 1989)."""
     _require_pyreadr("smoking")
     result = pyreadr.read_r(f'{datasets_path}smoking.rda')
     df = list(result.values())[0]
@@ -228,7 +229,7 @@ def _load_smoking_dataset(datasets_path: str) -> Tuple[pd.DataFrame, pd.DataFram
     
     # Create Y_df, Z_df, and X_df
     Y_df = create_y_dataframe(df, index_col="state", column_col="year", value_col="cigsale")
-    Z_df = create_z_dataframe(Y_df, treated_entity='California', treatment_start_year=1988)
+    Z_df = create_z_dataframe(Y_df, treated_entity='California', treatment_start_year=1989)
     
     cols_to_avg = [col for col in df.columns if col not in ['state', 'year', 'cigsale']]
     X_df = create_x_dataframe(
@@ -617,6 +618,36 @@ def _load_movielens_dataset(
     return Y_df, None, None
 
 
+def _load_jsa_dc(datasets_path: str) -> Tuple[pd.DataFrame, pd.DataFrame, None]:
+    """D.C. Job Search Assistance RCT, 1996Q1 CONTROL vs SJSA.
+
+    Five pre-entry quarters, the entry quarter dropped, then ten post quarters.
+    ``Z`` is 1 for SJSA in every post quarter.
+    """
+    pre = ("earn94q4", "earn95q1", "earn95q2", "earn95q3", "earn95q4")
+    post = (
+        "earn96q2", "earn96q3", "earn96q4",
+        "earn97q1", "earn97q2", "earn97q3", "earn97q4",
+        "earn98q1", "earn98q2", "earn98q3",
+    )
+    df = pd.read_stata(f"{datasets_path}jsapubdc.dta")
+    quarter = df["load_dt"].dt.to_period("Q").astype(str)
+    keep = df["sample"].isin(["CONTROL", "SJSA"]) & (quarter == "1996Q1")
+    cohort = df.loc[keep].sort_values("mprid")
+    columns = pre + post
+    labels = [f"{1900 + int(c[4:6])}{c[-2:].upper()}" for c in columns]
+    Y_df = pd.DataFrame(
+        cohort.loc[:, columns].to_numpy(dtype=float),
+        index=cohort["mprid"].astype(int).astype(str),
+        columns=labels,
+    )
+    Y_df.index.name = "mprid"
+    Z_df = pd.DataFrame(0.0, index=Y_df.index, columns=Y_df.columns)
+    treated = cohort["sample"].to_numpy() == "SJSA"
+    Z_df.iloc[treated, len(pre):] = 1.0
+    return Y_df, Z_df, None
+
+
 DATASET_BUILDERS: Dict[str, Callable[[str], Tuple[pd.DataFrame, Optional[pd.DataFrame], Optional[pd.DataFrame]]]] = {
     "smoking": _load_smoking_dataset,
     "basque": _load_basque_dataset,
@@ -634,6 +665,7 @@ DATASET_BUILDERS: Dict[str, Callable[[str], Tuple[pd.DataFrame, Optional[pd.Data
     "dunnhumby": _load_dunnhumby_dataset,
     "truus": _load_truus_dataset,
     "movielens": _load_movielens_dataset,
+    "jsa_dc": _load_jsa_dc,
 }
 
 

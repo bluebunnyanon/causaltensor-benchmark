@@ -4,6 +4,53 @@ from causaltensor.utils.linalg import transform_to_3D
 from causaltensor.cauest.result import Result
 from causaltensor.cauest.panel_solver import PanelSolver
 
+
+def _mp_median(beta):
+    """Median of the Marchenko-Pastur eigenvalue law at aspect ratio ``beta``."""
+    beta = float(beta)
+    a = (1.0 - np.sqrt(beta)) ** 2
+    b = (1.0 + np.sqrt(beta)) ** 2
+    lo = a if a > 0 else b * 1e-8
+
+    def cdf(x):
+        xs = np.linspace(lo, x, 400)
+        dens = np.sqrt(np.maximum((b - xs) * (xs - lo), 0.0)) / (2 * np.pi * beta * xs)
+        return float(np.sum((dens[:-1] + dens[1:]) * 0.5 * np.diff(xs)))
+
+    hi = b
+    left = lo
+    for _ in range(40):
+        mid = 0.5 * (left + hi)
+        if cdf(mid) < 0.5:
+            left = mid
+        else:
+            hi = mid
+    return 0.5 * (left + hi)
+
+
+def _gavish_donoho_rank(s, shape):
+    """Rank of singular values above the Gavish-Donoho noise bulk."""
+    s = np.asarray(s, dtype=float)
+    med = float(np.median(s))
+    if med <= 0 or min(shape) < 1:
+        return 1
+    n, p = shape
+    beta = min(n, p) / max(n, p)
+    lam = np.sqrt(2 * (beta + 1) + 8 * beta / (beta + 1 + np.sqrt(beta ** 2 + 14 * beta + 1)))
+    thresh = lam * med / np.sqrt(_mp_median(beta))
+    return max(int(np.sum(s >= thresh)), 1)
+
+
+def _energy_rank(s, spectrum_cut):
+    """Largest rank whose cumulative squared energy stays within ``1 - spectrum_cut``."""
+    s = np.asarray(s, dtype=float)
+    total = float(np.sum(s**2))
+    if total <= 0 or len(s) == 0:
+        return 1
+    ratios = np.cumsum(s**2) / total
+    return max(int(np.sum(ratios <= 1.0 - float(spectrum_cut))), 1)
+
+
 class DCResult(Result):
     def __init__(self, baseline=None, tau=None, std=None, return_tau_scalar=False):
         super().__init__(baseline=baseline, tau=tau, return_tau_scalar=return_tau_scalar,
@@ -78,14 +125,17 @@ class DCPanelSolver(PanelSolver):
         ----------
         suggest_r : int or None, optional
             Baseline rank.  Overrides the value passed at construction.
-            If ``None`` and ``auto_rank=True``, rank is selected from the
-            spectrum of ``O`` (retaining singular values that explain
-            ``1 - spectrum_cut`` of the total energy).
+            If ``None`` and ``auto_rank=True``, rank is the minimum of the
+            Gavish-Donoho rank and the energy rank. The Gavish-Donoho rank
+            counts singular values of ``O`` above the noise bulk, with the
+            noise level equal to the median singular value. The energy rank is
+            the largest rank whose cumulative squared energy stays within
+            ``1 - spectrum_cut``, and is at least 1.
         auto_rank : bool, optional
             Select rank automatically when ``suggest_r`` is not given (default
             ``True``).
         spectrum_cut : float, optional
-            Energy threshold for automatic rank selection (default ``0.002``).
+            Variance tail excluded from the energy rank (default ``0.002``).
         method : {'auto', 'convex', 'non-convex'}, optional
             Optimisation strategy.  ``'auto'`` picks whichever of convex and
             non-convex gives a lower residual (default).
@@ -285,7 +335,7 @@ class DCPanelSolver(PanelSolver):
 
     def DC_PR_auto_rank(self, spectrum_cut = 0.002, method='convex', method_non_neg=None):
         s = np.linalg.svd(self.O, full_matrices = False, compute_uv=False)
-        suggest_r = np.sum(np.cumsum(s**2) / np.sum(s**2) <= 1-spectrum_cut)
+        suggest_r = min(_gavish_donoho_rank(s, self.O.shape), _energy_rank(s, spectrum_cut))
         return self.DC_PR_with_suggested_rank(suggest_r = suggest_r, method=method, method_non_neg=method_non_neg)
 
 

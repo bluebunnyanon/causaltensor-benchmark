@@ -1,0 +1,9 @@
+dataset,n,T,n_treated_cells,n_treated_units,treated_unit_indices,treatment_start_col_indices,method,tau_hat,treated_pre_exposure_rmse,ok,error
+smoking,39,31,12,1,[2],[19],DCPR,-16.01057734433675,2.4459411950345578,True,
+smoking,39,31,12,1,[2],[19],MC_NNM_CV,-20.26753531420481,1.84622120583699,True,
+smoking,39,31,12,1,[2],[19],CovPCA,-25.108918970450166,2.938262714718997,True,
+smoking,39,31,12,1,[2],[19],OLS_DID,-27.34911108193079,6.97368371429031,True,
+smoking,39,31,12,1,[2],[19],SDID,-15.614310391476467,0.8961491270720116,True,
+smoking,39,31,12,1,[2],[19],SC,-19.513629744477438,1.656400207210112,True,
+smoking,39,31,12,1,[2],[19],RSC,-17.346132280826026,2.460709155601393,True,
+smoking,39,31,12,1,[2],[19],TC_BASELINE,-41.70811387948823,15.632510976870767,True,
